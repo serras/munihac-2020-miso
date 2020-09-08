@@ -1,0 +1,4 @@
+cradle:
+  cabal:
+    - path: "./server"
+      component: "miso-app:exe:notes-server"
