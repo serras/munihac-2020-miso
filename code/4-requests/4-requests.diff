@@ -1,0 +1,144 @@
+--- ../3-local-storage/web/Main.hs	2020-09-07 22:26:31.000000000 +0200
++++ web/Main.hs	2020-09-07 22:26:20.000000000 +0200
+@@ -3,23 +3,31 @@
+ {-# language RecordWildCards   #-}
+ {-# language DeriveGeneric     #-}
+ {-# language DeriveAnyClass    #-}
++{-# language DataKinds         #-}
++{-# language TypeApplications  #-}
++{-# language TypeOperators     #-}
+ 
+ module Main where
+ 
+ import System.Random
+ import Data.Aeson
++import Data.Proxy
+ import Data.Time.LocalTime
+ import GHC.Generics
+ 
++import Servant.API
++import Servant.Client.Ghcjs
++import Servant.Client.Internal.XhrClient
++
+ import Miso
+ import Miso.Effect.Storage
+-import Miso.String (MisoString, toMisoString, null)
++import Miso.String (MisoString, fromMisoString, toMisoString, null)
+ 
+ main :: IO ()
+ main = startApp App { .. }
+   where
+     initialAction = LoadItems
+-    model         = Model [] True ""
++    model         = Model [] Loading ""
+     update        = updateModel
+     view          = viewModel
+     events        = defaultEvents
+@@ -35,22 +43,31 @@
+     }
+   deriving (Show, Eq, Generic, FromJSON, ToJSON)
+ 
++data LoadStatus
++  = Loading | LoadError ClientError | Finished
++  deriving (Show, Eq)
++
+ data Model
+   = Model {
+       items :: [ListItem]
+-    , isLoading :: Bool
++    , loadStatus :: LoadStatus
+     , newItemText :: MisoString
+     }
+   deriving (Show, Eq) 
+ 
+-localStorageKey :: MisoString
+-localStorageKey = "items"
+-
+-defaultInitialItems :: [ListItem]
+-defaultInitialItems
+-  = [ ListItem "lunch"    "Have lunch"           True
+-    , ListItem "workshop" "Give a Miso workshop" False
+-    ]
++type API =    "items"  :> Get '[JSON] [ListItem]
++         :<|> "items"  :> ReqBody '[JSON] ListItem :> Post '[JSON] NoContent
++         :<|> "toggle" :> Capture "liId" String :> Post '[JSON] ListItem
++
++-- generate the client
++getItems   :: ClientM [ListItem]
++addItem    :: ListItem -> ClientM NoContent
++toggleItem :: String -> ClientM ListItem
++getItems :<|> addItem :<|> toggleItem = client (Proxy @API)
++
++-- server where to connect
++clientEnv :: ClientEnv
++clientEnv = ClientEnv (BaseUrl Http "localhost" 8080 "")
+ 
+ data Action
+   = None
+@@ -60,6 +77,7 @@
+   | AddToDo           { newListItem  :: ListItem }
+   | LoadItems
+   | SetInitialItems   { initialItems :: [ListItem] }
++  | SetLoadError      { loadError    :: ClientError }
+   deriving (Show, Eq)
+ 
+ updateModel :: Action -> Model -> Effect Action Model
+@@ -69,29 +87,28 @@
+                      -> if liId == toggleLiId
+                            then li { liDone = not liDone }
+                            else li ) (items m)
+-    -- in noEff new
+-    in m { items = new } <# updateLocalStorage new
++    in m { items = new } <# do
++      runClientMOrigin (toggleItem $ fromMisoString toggleLiId) clientEnv
++      pure None
+ updateModel (ChangeNewItemText new) m
+   = noEff $ m { newItemText = new }
+ updateModel AddToDoClick m@Model { newItemText }
+   = m { newItemText = "" } <# do
+       tme <- toMisoString . show <$> getZonedTime
+-      pure $ AddToDo $ ListItem { liId = tme, liText = newItemText, liDone = False }
++      let li = ListItem { liId = tme, liText = newItemText, liDone = False }
++      runClientMOrigin (addItem li) clientEnv
++      pure $ AddToDo li
+ updateModel (AddToDo li) m
+-  = let new = items m <> [li] in
+-    m { items = new } <# updateLocalStorage new
++  = noEff $ m { items = items m <> [li] } 
+ updateModel LoadItems m
+-  = m <# do store <- getLocalStorage localStorageKey
++  = m <# do store <- runClientMOrigin getItems clientEnv
+             case store of
+-              Left  _ -> pure $ SetInitialItems defaultInitialItems
++              Left  e -> pure $ SetLoadError e
+               Right i -> pure $ SetInitialItems i
+ updateModel (SetInitialItems items) m
+-  = noEff $ m { items, isLoading = False }
+-
+-updateLocalStorage :: [ListItem] -> JSM Action
+-updateLocalStorage new = do
+-  setLocalStorage localStorageKey new
+-  pure None
++  = noEff $ m { items, loadStatus = Finished }
++updateModel (SetLoadError e) m
++  = noEff $ m { loadStatus = LoadError e }
+ 
+ bootstrapUrl :: MisoString
+ bootstrapUrl = "https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+@@ -100,9 +117,13 @@
+ viewModel m
+   = div_ [ class_ "container"]
+          [ header m
+-         , if isLoading m
+-              then div_ [ class_ "spinner-border text-warning" ] [ ]
+-              else ul_ [ class_ "list-group" ] (map viewListItem (items m))
++         , case loadStatus m of
++             Loading     -> div_ [ class_ "spinner-border text-warning" ] [ ]
++             LoadError e -> div_ [ class_ "alert alert-danger" ]
++                                 [ span_ [ class_ "badge badge-danger" ] [ text "Error" ]
++                                 , text " "
++                                 , text (toMisoString $ show e) ]
++             Finished    -> ul_ [ class_ "list-group" ] (map viewListItem (items m))
+          , link_ [ rel_ "stylesheet"
+                  , href_ bootstrapUrl ] ]
+ 

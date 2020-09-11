@@ -1,0 +1,112 @@
+--- ../2-forms/web/Main.hs	2020-09-07 22:26:52.000000000 +0200
++++ web/Main.hs	2020-09-07 22:26:31.000000000 +0200
+@@ -1,20 +1,25 @@
+ {-# language NamedFieldPuns    #-}
+ {-# language OverloadedStrings #-}
+ {-# language RecordWildCards   #-}
++{-# language DeriveGeneric     #-}
++{-# language DeriveAnyClass    #-}
+ 
+ module Main where
+ 
+ import System.Random
++import Data.Aeson
+ import Data.Time.LocalTime
++import GHC.Generics
+ 
+ import Miso
++import Miso.Effect.Storage
+ import Miso.String (MisoString, toMisoString, null)
+ 
+ main :: IO ()
+ main = startApp App { .. }
+   where
+-    initialAction = None
+-    model         = Model initialItems ""
++    initialAction = LoadItems
++    model         = Model [] True ""
+     update        = updateModel
+     view          = viewModel
+     events        = defaultEvents
+@@ -28,27 +33,33 @@
+     , liText :: MisoString
+     , liDone :: Bool
+     }
+-  deriving (Show, Eq)
++  deriving (Show, Eq, Generic, FromJSON, ToJSON)
+ 
+ data Model
+   = Model {
+       items :: [ListItem]
++    , isLoading :: Bool
+     , newItemText :: MisoString
+     }
+   deriving (Show, Eq) 
+ 
+-initialItems :: [ListItem]
+-initialItems
++localStorageKey :: MisoString
++localStorageKey = "items"
++
++defaultInitialItems :: [ListItem]
++defaultInitialItems
+   = [ ListItem "lunch"    "Have lunch"           True
+     , ListItem "workshop" "Give a Miso workshop" False
+     ]
+ 
+ data Action
+   = None
+-  | ToggleState       { toggleLiId  :: MisoString }
+-  | ChangeNewItemText { newText     :: MisoString }
++  | ToggleState       { toggleLiId   :: MisoString }
++  | ChangeNewItemText { newText      :: MisoString }
+   | AddToDoClick 
+-  | AddToDo           { newListItem :: ListItem }
++  | AddToDo           { newListItem  :: ListItem }
++  | LoadItems
++  | SetInitialItems   { initialItems :: [ListItem] }
+   deriving (Show, Eq)
+ 
+ updateModel :: Action -> Model -> Effect Action Model
+@@ -59,7 +70,7 @@
+                            then li { liDone = not liDone }
+                            else li ) (items m)
+     -- in noEff new
+-    in m { items = new } <# do consoleLog ("toggled " <> toggleLiId) >> pure None
++    in m { items = new } <# updateLocalStorage new
+ updateModel (ChangeNewItemText new) m
+   = noEff $ m { newItemText = new }
+ updateModel AddToDoClick m@Model { newItemText }
+@@ -67,7 +78,20 @@
+       tme <- toMisoString . show <$> getZonedTime
+       pure $ AddToDo $ ListItem { liId = tme, liText = newItemText, liDone = False }
+ updateModel (AddToDo li) m
+-  = noEff $ m { items = items m <> [li] }
++  = let new = items m <> [li] in
++    m { items = new } <# updateLocalStorage new
++updateModel LoadItems m
++  = m <# do store <- getLocalStorage localStorageKey
++            case store of
++              Left  _ -> pure $ SetInitialItems defaultInitialItems
++              Right i -> pure $ SetInitialItems i
++updateModel (SetInitialItems items) m
++  = noEff $ m { items, isLoading = False }
++
++updateLocalStorage :: [ListItem] -> JSM Action
++updateLocalStorage new = do
++  setLocalStorage localStorageKey new
++  pure None
+ 
+ bootstrapUrl :: MisoString
+ bootstrapUrl = "https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+@@ -76,7 +100,9 @@
+ viewModel m
+   = div_ [ class_ "container"]
+          [ header m
+-         , ul_ [ class_ "list-group" ] (map viewListItem (items m))
++         , if isLoading m
++              then div_ [ class_ "spinner-border text-warning" ] [ ]
++              else ul_ [ class_ "list-group" ] (map viewListItem (items m))
+          , link_ [ rel_ "stylesheet"
+                  , href_ bootstrapUrl ] ]
+ 

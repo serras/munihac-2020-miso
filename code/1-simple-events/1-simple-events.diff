@@ -1,0 +1,68 @@
+--- ../0-view/web/Main.hs	2020-09-07 09:59:59.000000000 +0200
++++ web/Main.hs	2020-09-07 22:27:17.000000000 +0200
+@@ -4,8 +4,11 @@
+ 
+ module Main where
+ 
++import System.Random
++import Data.Time.LocalTime
++
+ import Miso
+-import Miso.String (MisoString)
++import Miso.String (MisoString, toMisoString)
+ 
+ main :: IO ()
+ main = startApp App { .. }
+@@ -37,10 +40,28 @@
+ 
+ data Action
+   = None
++  | ToggleState { toggleLiId  :: MisoString }
++  | RandomToDo
++  | AddToDo     { newListItem :: ListItem }
+   deriving (Show, Eq)
+ 
+ updateModel :: Action -> Model -> Effect Action Model
+-updateModel _ m = noEff m
++updateModel None m = noEff m
++updateModel (ToggleState toggleLiId) m
++  = let new = map (\li@ListItem { .. }
++                     -> if liId == toggleLiId
++                           then li { liDone = not liDone }
++                           else li ) m
++    -- in noEff new
++    in new <# do consoleLog ("toggled " <> toggleLiId) >> pure None
++updateModel RandomToDo m
++  = m <# do txt <- (["hey", "ho", "miso"] !!) <$> randomRIO (0, 2)
++            tme <- toMisoString . show <$> getZonedTime
++            let liId   = tme
++                liText = txt <> " at " <> tme
++            pure $ AddToDo $ ListItem { liDone = False, .. }
++updateModel (AddToDo li) m
++  = noEff (m <> [li])
+ 
+ bootstrapUrl :: MisoString
+ bootstrapUrl = "https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+@@ -61,7 +82,8 @@
+                          , type_    "checkbox"
+                          , value_   "on"
+                          , checked_ liDone
+-                         , id_      liId ]
++                         , id_      liId
++                         , onChange (\_ -> ToggleState liId) ]
+                 , label_ [ class_ (if liDone
+                                       then "custom-control-label text-muted"
+                                       else "custom-control-label")
+@@ -74,4 +96,9 @@
+          [ h2_ [ class_ "bd-title text-light" ]
+                [ text "To-do "
+                , span_ [ class_ "badge badge-warning"]
+-                       [ text "in miso!"] ] ]
+\ No newline at end of file
++                       [ text "in miso!"] ]
++         , form_ [ class_ "form-inline" ]
++                 [ button_ [ class_  "btn btn-outline-warning"
++                           , type_   "button"
++                           , onClick RandomToDo ]
++                 [ text "New (random) to-do" ] ] ]
+\ No newline at end of file

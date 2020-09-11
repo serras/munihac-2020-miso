@@ -1,0 +1,82 @@
+--- ../3-local-storage/web/Main.hs	2020-09-07 22:26:31.000000000 +0200
++++ web/Main.hs	2020-09-07 22:37:12.000000000 +0200
+@@ -3,6 +3,7 @@
+ {-# language RecordWildCards   #-}
+ {-# language DeriveGeneric     #-}
+ {-# language DeriveAnyClass    #-}
++{-# language MultiWayIf        #-}
+ 
+ module Main where
+ 
+@@ -16,14 +17,15 @@
+ import Miso.String (MisoString, toMisoString, null)
+ 
+ main :: IO ()
+-main = startApp App { .. }
++main = do
++  currentUri <- getCurrentURI
++  startApp App { model = Model currentUri [] True "", .. }
+   where
+     initialAction = LoadItems
+-    model         = Model [] True ""
+     update        = updateModel
+     view          = viewModel
+     events        = defaultEvents
+-    subs          = []
++    subs          = [ uriSub ChangeURI ]
+     mountPoint    = Nothing
+     logLevel      = Off
+ 
+@@ -37,7 +39,8 @@
+ 
+ data Model
+   = Model {
+-      items :: [ListItem]
++      currentUri :: URI
++    , items :: [ListItem]
+     , isLoading :: Bool
+     , newItemText :: MisoString
+     }
+@@ -60,6 +63,7 @@
+   | AddToDo           { newListItem  :: ListItem }
+   | LoadItems
+   | SetInitialItems   { initialItems :: [ListItem] }
++  | ChangeURI         { newURI       :: URI }
+   deriving (Show, Eq)
+ 
+ updateModel :: Action -> Model -> Effect Action Model
+@@ -87,6 +91,8 @@
+               Right i -> pure $ SetInitialItems i
+ updateModel (SetInitialItems items) m
+   = noEff $ m { items, isLoading = False }
++updateModel (ChangeURI newUri) m
++  = noEff $ m { currentUri = newUri }
+ 
+ updateLocalStorage :: [ListItem] -> JSM Action
+ updateLocalStorage new = do
+@@ -100,9 +106,13 @@
+ viewModel m
+   = div_ [ class_ "container"]
+          [ header m
+-         , if isLoading m
+-              then div_ [ class_ "spinner-border text-warning" ] [ ]
+-              else ul_ [ class_ "list-group" ] (map viewListItem (items m))
++         , if | uriFragment (currentUri m) == "#about"
++              -> p_ [ class_ "lead" ]
++                    [ text "Built for MuniHac 2020" ]
++              | isLoading m
++              -> div_ [ class_ "spinner-border text-warning" ] [ ]
++              | otherwise
++              -> ul_ [ class_ "list-group" ] (map viewListItem (items m))
+          , link_ [ rel_ "stylesheet"
+                  , href_ bootstrapUrl ] ]
+ 
+@@ -129,6 +139,8 @@
+                [ text "To-do "
+                , span_ [ class_ "badge badge-warning"]
+                        [ text "in miso!"] ]
++         , a_ [ class_ "nav-link text-light", href_ "#about" ]
++              [ text "About" ]
+          , form_ [ class_ "form-inline" ]
+                  [ input_  [ class_       "form-control mr-sm-2"
+                            , type_        "text" 

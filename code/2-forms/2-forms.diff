@@ -1,0 +1,117 @@
+--- ../1-simple-events/web/Main.hs	2020-09-07 22:27:17.000000000 +0200
++++ web/Main.hs	2020-09-07 22:26:52.000000000 +0200
+@@ -8,13 +8,13 @@
+ import Data.Time.LocalTime
+ 
+ import Miso
+-import Miso.String (MisoString, toMisoString)
++import Miso.String (MisoString, toMisoString, null)
+ 
+ main :: IO ()
+ main = startApp App { .. }
+   where
+     initialAction = None
+-    model         = initialItems
++    model         = Model initialItems ""
+     update        = updateModel
+     view          = viewModel
+     events        = defaultEvents
+@@ -30,9 +30,14 @@
+     }
+   deriving (Show, Eq)
+ 
+-type Model = [ListItem]
++data Model
++  = Model {
++      items :: [ListItem]
++    , newItemText :: MisoString
++    }
++  deriving (Show, Eq) 
+ 
+-initialItems :: Model
++initialItems :: [ListItem]
+ initialItems
+   = [ ListItem "lunch"    "Have lunch"           True
+     , ListItem "workshop" "Give a Miso workshop" False
+@@ -40,9 +45,10 @@
+ 
+ data Action
+   = None
+-  | ToggleState { toggleLiId  :: MisoString }
+-  | RandomToDo
+-  | AddToDo     { newListItem :: ListItem }
++  | ToggleState       { toggleLiId  :: MisoString }
++  | ChangeNewItemText { newText     :: MisoString }
++  | AddToDoClick 
++  | AddToDo           { newListItem :: ListItem }
+   deriving (Show, Eq)
+ 
+ updateModel :: Action -> Model -> Effect Action Model
+@@ -51,17 +57,17 @@
+   = let new = map (\li@ListItem { .. }
+                      -> if liId == toggleLiId
+                            then li { liDone = not liDone }
+-                           else li ) m
++                           else li ) (items m)
+     -- in noEff new
+-    in new <# do consoleLog ("toggled " <> toggleLiId) >> pure None
+-updateModel RandomToDo m
+-  = m <# do txt <- (["hey", "ho", "miso"] !!) <$> randomRIO (0, 2)
+-            tme <- toMisoString . show <$> getZonedTime
+-            let liId   = tme
+-                liText = txt <> " at " <> tme
+-            pure $ AddToDo $ ListItem { liDone = False, .. }
++    in m { items = new } <# do consoleLog ("toggled " <> toggleLiId) >> pure None
++updateModel (ChangeNewItemText new) m
++  = noEff $ m { newItemText = new }
++updateModel AddToDoClick m@Model { newItemText }
++  = m { newItemText = "" } <# do
++      tme <- toMisoString . show <$> getZonedTime
++      pure $ AddToDo $ ListItem { liId = tme, liText = newItemText, liDone = False }
+ updateModel (AddToDo li) m
+-  = noEff (m <> [li])
++  = noEff $ m { items = items m <> [li] }
+ 
+ bootstrapUrl :: MisoString
+ bootstrapUrl = "https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+@@ -69,8 +75,8 @@
+ viewModel :: Model -> View Action
+ viewModel m
+   = div_ [ class_ "container"]
+-         [ header
+-         , ul_ [ class_ "list-group" ] (map viewListItem m)
++         [ header m
++         , ul_ [ class_ "list-group" ] (map viewListItem (items m))
+          , link_ [ rel_ "stylesheet"
+                  , href_ bootstrapUrl ] ]
+ 
+@@ -90,15 +96,21 @@
+                          , for_   liId ]
+                          [ text liText ]] ]
+ 
+-header :: View Action
+-header
++header :: Model -> View Action
++header Model { newItemText }
+   = nav_ [ class_ "navbar navbar-dark bg-dark"]
+          [ h2_ [ class_ "bd-title text-light" ]
+                [ text "To-do "
+                , span_ [ class_ "badge badge-warning"]
+                        [ text "in miso!"] ]
+          , form_ [ class_ "form-inline" ]
+-                 [ button_ [ class_  "btn btn-outline-warning"
+-                           , type_   "button"
+-                           , onClick RandomToDo ]
+-                 [ text "New (random) to-do" ] ] ]
+\ No newline at end of file
++                 [ input_  [ class_       "form-control mr-sm-2"
++                           , type_        "text" 
++                           , placeholder_ "Do this" 
++                           , value_       newItemText 
++                           , onChange     ChangeNewItemText ]
++                 , button_ [ class_   "btn btn-outline-warning"
++                           , type_    "button"
++                           , onClick  AddToDoClick
++                           , disabled_ (Miso.String.null newItemText) ]
++                           [ text "New to-do" ] ] ]
+\ No newline at end of file
